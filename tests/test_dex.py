@@ -1,197 +1,174 @@
+import binascii
+import os
+import random
 import unittest
 
-import sys
-import random
-import binascii
-import logging
+from androguard.core import dex
+from androguard.misc import AnalyzeAPK
 
-from androguard.core.bytecodes import dvm
-
-log = logging.getLogger("androguard.tests")
+test_dir = os.path.dirname(os.path.abspath(__file__))
 
 
-class DexTest(unittest.TestCase):
-    def testDex(self):
-        with open("examples/android/TestsAndroguard/bin/classes.dex", "rb") as fd:
-            d = dvm.DalvikVMFormat(fd.read())
-            self.assertTrue(d)
-
-            classes = d.get_classes()
-            self.assertTrue(classes)
-            self.assertEqual(len(classes), 340)
-
-            methods = d.get_methods()
-            self.assertTrue(methods)
-            self.assertEqual(len(methods), 2600)
-
-            fields = d.get_fields()
-            self.assertTrue(fields)
-            self.assertEqual(len(fields), 803)
-
-    def testBrokenDex(self):
-        """Test various broken DEX headers"""
-        # really not a dex file
-        with self.assertRaises(ValueError) as cnx:
-            dvm.DalvikVMFormat(b'\x00\x00\x00\x00\x00\x00\x00\x00')
-        self.assertIn('Header too small', str(cnx.exception))
-
-        # Adler32 will not match, zeroed out file
-        dex = binascii.unhexlify('6465780A303335001F6C4D5A6ACF889AF588F3237FC9F20B41F56A2408749D1B'
-                                 'C81E000070000000785634120000000000000000341E00009400000070000000'
-                                 '2E000000C0020000310000007803000011000000C4050000590000004C060000'
-                                 '090000001409000094140000340A0000' + ('00' * (7880 - 0x70)))
-
-        with self.assertRaises(ValueError) as cnx:
-            dvm.DalvikVMFormat(dex)
-        self.assertIn("Adler32", str(cnx.exception))
-
-        # A very very basic dex file (without a map)
-        # But should parse...
-        dex = binascii.unhexlify('6465780A30333500460A4882696E76616C6964696E76616C6964696E76616C69'
-                                 '7000000070000000785634120000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000000000000000000000000000000000'
-                                 '00000000000000000000000000000000')
-        with self.assertLogs(logger='androguard.dvm', level=logging.WARNING) as cnx:
-            self.assertIsNotNone(dvm.DalvikVMFormat(dex))
-        self.assertEqual(cnx.output, ["WARNING:androguard.dvm:no map list! This DEX file is probably empty."])
-
-        # Wrong header size
-        dex = binascii.unhexlify('6465780A30333500480A2C8D696E76616C6964696E76616C6964696E76616C69'
-                                 '7100000071000000785634120000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000')
-        with self.assertRaises(ValueError) as cnx:
-            dvm.DalvikVMFormat(dex)
-        self.assertIn("Wrong header size", str(cnx.exception))
-
-        # Non integer version
-        dex = binascii.unhexlify('6465780AFF00AB00460A4882696E76616C6964696E76616C6964696E76616C69'
-                                 '7000000070000000785634120000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000000000000000000000000000000000'
-                                 '00000000000000000000000000000000')
-        with self.assertLogs(logger='androguard.dvm', level=logging.WARNING) as cnx:
-            dvm.DalvikVMFormat(dex)
-        self.assertEqual(cnx.output, ["WARNING:androguard.dvm:Wrong DEX version: b'dex\\n\\xff\\x00\\xab\\x00', trying to parse anyways",
-                                      "WARNING:androguard.dvm:no map list! This DEX file is probably empty."])
-
-        # Big Endian file
-        dex = binascii.unhexlify('6465780A30333500460AF480696E76616C6964696E76616C6964696E76616C69'
-                                 '7000000070000000123456780000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000000000000000000000000000000000'
-                                 '00000000000000000000000000000000')
-        with self.assertRaises(NotImplementedError) as cnx:
-            dvm.DalvikVMFormat(dex)
-        self.assertIn("swapped endian tag", str(cnx.exception))
-
-        # Weird endian file
-        dex = binascii.unhexlify('6465780A30333500AB0BC3E4696E76616C6964696E76616C6964696E76616C69'
-                                 '7000000070000000ABCDEF120000000000000000000000000000000000000000'
-                                 '0000000000000000000000000000000000000000000000000000000000000000'
-                                 '00000000000000000000000000000000')
-        with self.assertRaises(ValueError) as cnx:
-            dvm.DalvikVMFormat(dex)
-        self.assertIn("Wrong endian tag", str(cnx.exception))
-
-    def testDexWrapper(self):
-        from androguard.misc import AnalyzeDex
-        from androguard.core.bytecodes.dvm import DalvikVMFormat
-        from androguard.core.analysis.analysis import Analysis
-        h, d, dx = AnalyzeDex("examples/android/TestsAndroguard/bin/classes.dex")
-        self.assertEqual(h, '2f24538b3064f1f88d3eb29ee7fbd2146779a4c9144aefa766d18965be8775c7')
-        self.assertIsInstance(d, DalvikVMFormat)
-        self.assertIsInstance(dx, Analysis)
-
-        classes = d.get_classes()
-        self.assertTrue(classes)
-        self.assertEqual(len(classes), 340)
-
-        methods = d.get_methods()
-        self.assertTrue(methods)
-        self.assertEqual(len(methods), 2600)
-
-        fields = d.get_fields()
-        self.assertTrue(fields)
-        self.assertEqual(len(fields), 803)
-
-    def testDexVersion(self):
-        dexfiles = [
-            ('examples/dalvik/test/bin/classes_output.dex', 35),
-            ('examples/dalvik/test/bin/classes.dex', 35),
-            ('examples/obfu/classes_tc_diff_dasho.dex', 35),
-            ('examples/obfu/classes_tc_dasho.dex', 35),
-            ('examples/obfu/classes_tc_mark1.dex', 35),
-            ('examples/obfu/classes_tc.dex', 35),
-            ('examples/obfu/classes_tc_diff.dex', 35),
-            ('examples/obfu/classes_tc_proguard.dex', 35),
-            ('examples/android/TCDiff/bin/classes.dex', 35),
-            ('examples/android/TestsAndroguard/bin/classes.dex', 35),
-            ('examples/android/TC/bin/classes.dex', 35),
-            ('examples/tests/Test.dex', 35),
-            ('examples/tests/ExceptionHandling.dex', 35),
-            ('examples/tests/InterfaceCls.dex', 35),
-            ('examples/tests/FillArrays.dex', 35),
-            ('examples/tests/StringTests.dex', 35),
-            ('examples/tests/AnalysisTest.dex', 35),
-            ('examples/tests/Switch.dex', 35),
-            # Dalvik 036
-            ('examples/tests/2992e3a94a774ddfe2b50c6e8667d925a5684d71.36.dex', 36),
-            ('examples/tests/921d74ac9568121d0ea1453922a369cb66739c68.36.dex', 36),
-            # Dalvik 037
-            ('examples/tests/dc4b1bb9d58daa82f29e60f79d5662f731a3351f.37.dex', 37),
-            ('examples/tests/fdroid/com.example.trigger_130.dex', 37),
-            ('examples/tests/fdroid/net.eneiluj.nextcloud.phonetrack_2.dex', 37),
-            ('examples/tests/fdroid/org.andstatus.app_254.dex', 37),
-            # Dalvik 038 / Requires a minimal API level of 26
-            ('examples/tests/fdroid/cat.mvmike.minimalcalendarwidget_17.dex', 38),
-            ('examples/tests/okhttp.d8.038.dex', 38),
-            ('examples/tests/okhttp.dx.038.dex', 38),  # contains invoke-custom opcode
-            # Dalvik 039 / Requires a minimal API level of 28
-            ('examples/tests/okhttp.d8.039.dex', 39),
-            ('examples/tests/okhttp.dx.039.dex', 39),  # contains invoke-custom opcode
-            ]
-
-        for dexf, dexver in dexfiles:
-            log.info("Testing {} -> Version {}".format(dexf, dexver))
-            with open(dexf, 'rb') as fp:
-                d = dvm.DalvikVMFormat(fp.read())
-
-                self.assertEqual(d.version, dexver)
-
-                self.assertGreater(d.header.string_ids_size, 0)
-                self.assertGreater(d.header.type_ids_size, 0)
-                self.assertGreater(d.header.proto_ids_size, 0)
-                self.assertGreater(d.header.method_ids_size, 0)
-                self.assertGreater(d.header.class_defs_size, 0)
-                self.assertGreater(d.header.data_size, 0)
-
-                for i in range(d.header.string_ids_size):
-                    self.assertIsInstance(d.strings[i], dvm.StringDataItem)
-
-                for m in d.get_methods():
-                    l = 0
-                    i = -1
-                    for i, ins in enumerate(m.get_instructions()):
-                        l += ins.get_length()
-                        if ins.get_op_value() <= 0xFF:
-                            self.assertIsInstance(ins, dvm.Instruction)
-                        else:
-                            self.assertIn(ins.get_name(), ('fill-array-data-payload',
-                                                           'packed-switch-payload',
-                                                           'sparse-switch-payload'))
-                    if m.get_code() is not None:
-                        # Make sure all instructions are parsed
-                        self.assertGreaterEqual(i + 1, 1)
-                        self.assertEqual(l % 2, 0)
-                        self.assertEqual(l, m.get_code().insns_size * 2)
-
-
-class MockClassManager():
+class MockClassManager:
     @property
     def packer(self):
-        return dvm.DalvikPacker(0x12345678)
+        return dex.DalvikPacker(0x12345678)
 
     def get_odex_format(self):
         return False
+
+
+class VMClassTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        test_apk_path = os.path.join(test_dir, 'data/APK/TestActivity.apk')
+        cls.a, cls.d, cls.dx = AnalyzeAPK(test_apk_path)
+
+    def testVMClass(self):
+        """test number of ClassDefItems, StringDataItems, FieldIdItems, and MethodIdItems"""
+
+        num_class_def_items = 0
+        num_strings_data_items = 0
+        num_field_id_items = 0
+        num_method_id_items = 0
+
+        # the below field exists in the fieldIds list, but
+        # their class doesnt exist, this is bc its loaded at runtime
+        # 19 [FieldIdItem]: class_idx=0x13 type_idx=0x242 name_idx=0x1099
+        # classIdx = 0x13 = 19
+        # typeIdx = 0x242 = 578
+        # nameIdx = 0x1099 = 4249
+        # className = Landroid/app/Notification;
+        # typeName = [J
+        # fieldName = vibrate
+
+        # see DEX format spec https://source.android.com/docs/core/runtime/dex-format
+        # https://reverseengineering.stackexchange.com/questions/21767/dex-file-referenced-type-is-not-defined-in-file
+        # field ids, type ids, and method ids references
+        # are not required to be defined in the dex since they can be resolved at runtime via shared library
+        for vm in self.dx.vms:
+            num_class_def_items += vm.get_len_classes()  # ClassDefItems
+            num_strings_data_items += vm.get_len_strings()  # StringDataItems
+            num_field_id_items += vm.get_len_fields()  # FieldIdItems
+            num_method_id_items += vm.get_len_methods()  # MethodIdItems
+
+        self.assertEqual(len(self.dx.vms), 1)
+        self.assertEqual(num_class_def_items, 340)
+        self.assertEqual(num_strings_data_items, 4329)
+        self.assertEqual(num_field_id_items, 865)
+        self.assertEqual(num_method_id_items, 3602)
+
+    def testAccessflags(self):
+        class_name_accessflag_map = {
+            'Ltests/androguard/TestLoops;': {
+                'access_flag': 0x1,  # public
+                'methods': {
+                    '<init>': 0x1 | 0x10000,  # public | constructor
+                    'testBreak': 0x1,  # public
+                    'testBreak2': 0x1,
+                    'testBreak3': 0x1,
+                    'testBreak4': 0x1,
+                    'testBreakDoWhile': 0x1,
+                    'testBreakMid': 0x1,
+                    'testBreakbis': 0x1,
+                    'testDiffWhileDoWhile': 0x1,
+                    'testDoWhile': 0x1,
+                    'testDoWhileTrue': 0x1,
+                    'testFor': 0x1,
+                    'testIrreducible': 0x1,
+                    'testMultipleLoops': 0x1,
+                    'testNestedLoops': 0x1,
+                    'testReducible': 0x1,
+                    'testWhile': 0x1,
+                    'testWhile2': 0x1,
+                    'testWhile3': 0x1,
+                    'testWhile4': 0x1,
+                    'testWhile5': 0x1,
+                    'testWhileTrue': 0x1,
+                },
+                'fields': {},
+            },
+            'Ltests/androguard/TestLoops$Loop;': {
+                'access_flag': 0x1,  # public
+                'methods': {
+                    '<init>': 0x4 | 0x10000  # protected | constructor
+                },
+                'fields': {
+                    'i': 0x1 | 0x8,  # public | static
+                    'j': 0x1 | 0x8,  # public | static
+                },
+            },
+            'Ltests/androguard/TestIfs;': {
+                'access_flag': 0x1,  # public
+                'methods': {
+                    '<init>': 0x1 | 0x10000,  # public | constructor
+                    'testIF': 0x1 | 0x8,  # public | static
+                    'testIF2': 0x1 | 0x8,
+                    'testIF3': 0x1 | 0x8,
+                    'testIF4': 0x1 | 0x8,
+                    'testIF5': 0x1 | 0x8,
+                    'testIfBool': 0x1 | 0x8,
+                    'testShortCircuit': 0x1 | 0x8,
+                    'testShortCircuit2': 0x1 | 0x8,
+                    'testShortCircuit3': 0x1 | 0x8,
+                    'testShortCircuit4': 0x1 | 0x8,
+                    'testCFG': 0x1,  # public
+                    'testCFG2': 0x1,
+                },
+                'fields': {'P': 0x2, 'Q': 0x2, 'R': 0x2, 'S': 0x2},  # private
+            },
+        }
+
+        # ensure these classes exist in the Analysis
+        for expected_class_name in class_name_accessflag_map.keys():
+            self.assertTrue(self.dx.is_class_present(expected_class_name))
+
+        # test access flags for classes
+        for (
+            expected_class_name,
+            class_data,
+        ) in class_name_accessflag_map.items():
+            class_analysis = self.dx.get_class_analysis(expected_class_name)
+            class_access_flags = (
+                class_analysis.get_vm_class().get_access_flags()
+            )
+            self.assertEqual(class_access_flags, class_data['access_flag'])
+
+            # test access flags for methods
+            encoded_methods = class_analysis.get_vm_class().get_methods()
+            for expected_method_name, expected_access_flags in class_data[
+                'methods'
+            ].items():
+                # ensure this method is in the class
+                self.assertIn(
+                    expected_method_name,
+                    [method.name for method in encoded_methods],
+                )
+
+                # ensure access flags match
+                for method in encoded_methods:
+                    if method.name == expected_method_name:
+                        self.assertEqual(
+                            method.get_access_flags(), expected_access_flags
+                        )
+
+            # test access flags for fields
+            encoded_fields = class_analysis.get_vm_class().get_fields()
+            for expected_field_name, expected_access_flags in class_data[
+                'fields'
+            ].items():
+                # ensure this field is in the class
+                self.assertIn(
+                    expected_field_name,
+                    [field.name for field in encoded_fields],
+                )
+
+                # ensure access flags match
+                for field in encoded_fields:
+                    if field.name == expected_field_name:
+                        self.assertEqual(
+                            field.get_access_flags(), expected_access_flags
+                        )
 
 
 class InstructionTest(unittest.TestCase):
@@ -201,9 +178,9 @@ class InstructionTest(unittest.TestCase):
         random.seed(1337)
 
         for op_value in range(0, 256):
-            ins = dvm.DALVIK_OPCODES_FORMAT[op_value][0]
-            name = dvm.DALVIK_OPCODES_FORMAT[op_value][1]
-            self.assertEqual(issubclass(ins, dvm.Instruction), True)
+            ins = dex.DALVIK_OPCODES_FORMAT[op_value][0]
+            name = dex.DALVIK_OPCODES_FORMAT[op_value][1]
+            self.assertEqual(issubclass(ins, dex.Instruction), True)
 
             # The Name should code for the length of the opcode
             length = int(ins.__name__[11]) * 2
@@ -211,7 +188,7 @@ class InstructionTest(unittest.TestCase):
 
             if name[0] == 'unused':
                 # unused instructions should raise an error on invocation
-                with self.assertRaises(dvm.InvalidInstruction):
+                with self.assertRaises(dex.InvalidInstruction):
                     ins(MockClassManager(), bytearray([op_value, 0]))
                 # therefore, we can not test much else here...
                 continue
@@ -219,28 +196,42 @@ class InstructionTest(unittest.TestCase):
             # Test if instruction can be parsed
             bytecode = bytearray([op_value] + [0] * (length - 1))
             instruction = ins(MockClassManager(), bytecode)
-            self.assertIsInstance(instruction, dvm.Instruction)
+            self.assertIsInstance(instruction, dex.Instruction)
             self.assertEqual(instruction.get_op_value(), op_value)
 
             # And packed again
             self.assertEqual(instruction.get_raw(), bytecode)
 
             # Test with some pseudorandom stuff
-            if ins.__name__ in ['Instruction10x', 'Instruction20t', 'Instruction30t', 'Instruction32x', 'Instruction45cc']:
+            if ins.__name__ in [
+                'Instruction10x',
+                'Instruction20t',
+                'Instruction30t',
+                'Instruction32x',
+                'Instruction45cc',
+            ]:
                 # note this only works for certain opcode (which are not forced to 0 in certain places)
                 # Thus we need to make sure these places are zero.
                 # Instruction45cc: Has constrained regarding the parameter AA
-                bytecode = bytearray([op_value, 0] + [random.randint(0x00, 0xff) for _ in range(length - 2)])
+                bytecode = bytearray(
+                    [op_value, 0]
+                    + [random.randint(0x00, 0xFF) for _ in range(length - 2)]
+                )
             else:
-                bytecode = bytearray([op_value] + [random.randint(0x00, 0xff) for _ in range(length - 1)])
+                bytecode = bytearray(
+                    [op_value]
+                    + [random.randint(0x00, 0xFF) for _ in range(length - 1)]
+                )
             instruction = ins(MockClassManager(), bytecode)
-            self.assertIsInstance(instruction, dvm.Instruction)
+            self.assertIsInstance(instruction, dex.Instruction)
             self.assertEqual(instruction.get_op_value(), op_value)
             self.assertEqual(instruction.get_raw(), bytecode)
 
     def testNOP(self):
         """test if NOP instructions are parsed"""
-        instruction = dvm.Instruction10x(MockClassManager(), bytearray(b"\x00\x00"))
+        instruction = dex.Instruction10x(
+            MockClassManager(), bytearray(b"\x00\x00")
+        )
         self.assertEqual(instruction.get_name(), "nop")
 
     def testLinearSweep(self):
@@ -249,8 +240,10 @@ class InstructionTest(unittest.TestCase):
         instructions = ['nop', 'nop', 'nop', 'return-void']
         l = 0
 
-        for ins in dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 4, bytecode, 0):
-            self.assertIsInstance(ins, dvm.Instruction10x)
+        for ins in dex.LinearSweepAlgorithm.get_instructions(
+            MockClassManager(), 4, bytecode, 0
+        ):
+            self.assertIsInstance(ins, dex.Instruction10x)
             self.assertEqual(ins.get_length(), 2)
             self.assertEqual(ins.get_name(), instructions.pop(0))
             l += ins.get_length()
@@ -260,33 +253,54 @@ class InstructionTest(unittest.TestCase):
 
     def testLinearSweepStrings(self):
         # very basic function, strings and invokes
-        bytecode = bytearray(binascii.unhexlify('1A000F001A0100001A0214001A0311001A0415001A0413001A0508001A061200'
-                                                '1A0716001A081000620900006E2002000900620000006E200200100062000000'
-                                                '6E2002002000620000006E2002003000620000006E2002003000620000006E20'
-                                                '02004000620000006E2002005000620000006E2002006000620000006E200200'
-                                                '7000620000006E20020080000E00'))
+        bytecode = bytearray(
+            binascii.unhexlify(
+                '1A000F001A0100001A0214001A0311001A0415001A0413001A0508001A061200'
+                '1A0716001A081000620900006E2002000900620000006E200200100062000000'
+                '6E2002002000620000006E2002003000620000006E2002003000620000006E20'
+                '02004000620000006E2002005000620000006E2002006000620000006E200200'
+                '7000620000006E20020080000E00'
+            )
+        )
         instructions = [
-            'const-string', 'const-string',
-            'const-string', 'const-string',
-            'const-string', 'const-string',
-            'const-string', 'const-string',
-            'const-string', 'const-string',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
-            'sget-object', 'invoke-virtual',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'const-string',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
+            'sget-object',
+            'invoke-virtual',
             'return-void',
         ]
         l = 0
 
-        for ins in dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 71, bytecode, 0):
-            self.assertIsInstance(ins, dvm.Instruction)
+        for ins in dex.LinearSweepAlgorithm.get_instructions(
+            MockClassManager(), 71, bytecode, 0
+        ):
+            self.assertIsInstance(ins, dex.Instruction)
             self.assertEqual(ins.get_name(), instructions.pop(0))
             l += ins.get_length()
         # check if all instructions were consumed
@@ -296,8 +310,12 @@ class InstructionTest(unittest.TestCase):
 
     def testLinearSweepSwitch(self):
         """test if switch payloads are unpacked correctly"""
-        bytecode = bytearray(binascii.unhexlify('2B02140000001300110038030400130063000F001300170028F913002A0028F6'
-                                                '1300480028F3000000010300010000000A0000000D00000010000000'))
+        bytecode = bytearray(
+            binascii.unhexlify(
+                '2B02140000001300110038030400130063000F001300170028F913002A0028F6'
+                '1300480028F3000000010300010000000A0000000D00000010000000'
+            )
+        )
 
         instructions = [
             'packed-switch',
@@ -316,11 +334,13 @@ class InstructionTest(unittest.TestCase):
         ]
         l = 0
 
-        for ins in dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 30, bytecode, 0):
+        for ins in dex.LinearSweepAlgorithm.get_instructions(
+            MockClassManager(), 30, bytecode, 0
+        ):
             if len(instructions) > 1:
-                self.assertIsInstance(ins, dvm.Instruction)
+                self.assertIsInstance(ins, dex.Instruction)
             else:
-                self.assertIsInstance(ins, dvm.PackedSwitch)
+                self.assertIsInstance(ins, dex.PackedSwitch)
             self.assertEqual(ins.get_name(), instructions.pop(0))
             l += ins.get_length()
         # check if all instructions were consumed
@@ -329,21 +349,41 @@ class InstructionTest(unittest.TestCase):
 
     def testLSAArrays(self):
         """Test if fill-array-data-payload is parsed"""
-        bytecode = bytearray(binascii.unhexlify('12412310030026002D0000005B30000012702300050026002B0000005B300300'
-                                                '1250230004002600350000005B300100231007002600380000005B3002001220'
-                                                '2300060012011A020D004D02000112111A0211004D0200015B3004000E000000'
-                                                '0003010004000000141E28320003040007000000010000000200000003000000'
-                                                '0400000005000000E70300000A899D0000030200050000006100620078007A00'
-                                                '63000000000302000400000005000A000F001400'))
+        bytecode = bytearray(
+            binascii.unhexlify(
+                '12412310030026002D0000005B30000012702300050026002B0000005B300300'
+                '1250230004002600350000005B300100231007002600380000005B3002001220'
+                '2300060012011A020D004D02000112111A0211004D0200015B3004000E000000'
+                '0003010004000000141E28320003040007000000010000000200000003000000'
+                '0400000005000000E70300000A899D0000030200050000006100620078007A00'
+                '63000000000302000400000005000A000F001400'
+            )
+        )
 
         instructions = [
-            'const/4', 'new-array', 'fill-array-data', 'iput-object',
-            'const/4', 'new-array', 'fill-array-data', 'iput-object',
-            'const/4', 'new-array', 'fill-array-data', 'iput-object',
-            'new-array', 'fill-array-data', 'iput-object',
-            'const/4', 'new-array',
-            'const/4', 'const-string', 'aput-object',
-            'const/4', 'const-string', 'aput-object',
+            'const/4',
+            'new-array',
+            'fill-array-data',
+            'iput-object',
+            'const/4',
+            'new-array',
+            'fill-array-data',
+            'iput-object',
+            'const/4',
+            'new-array',
+            'fill-array-data',
+            'iput-object',
+            'new-array',
+            'fill-array-data',
+            'iput-object',
+            'const/4',
+            'new-array',
+            'const/4',
+            'const-string',
+            'aput-object',
+            'const/4',
+            'const-string',
+            'aput-object',
             'iput-object',
             'return-void',
             'nop',  # alignment
@@ -358,12 +398,14 @@ class InstructionTest(unittest.TestCase):
         # array information: (element_width, size)
         arrays = [(1, 4), (4, 7), (2, 5), (2, 4)]
 
-        for ins in dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 90, bytecode, 0):
+        for ins in dex.LinearSweepAlgorithm.get_instructions(
+            MockClassManager(), 90, bytecode, 0
+        ):
             self.assertEqual(ins.get_name(), instructions.pop(0))
             if ins.get_name() != 'fill-array-data-payload':
-                self.assertIsInstance(ins, dvm.Instruction)
+                self.assertIsInstance(ins, dex.Instruction)
             else:
-                self.assertIsInstance(ins, dvm.FillArrayData)
+                self.assertIsInstance(ins, dex.FillArrayData)
                 elem_size, size = arrays.pop(0)
                 self.assertEqual(ins.element_width, elem_size)
                 self.assertEqual(ins.size, size)
@@ -375,79 +417,142 @@ class InstructionTest(unittest.TestCase):
         self.assertEqual(len(bytecode), l)
 
     def testWrongInstructions(self):
-        """Test if unknown instructions log an error"""
-        with self.assertLogs(logger='androguard.dvm', level=logging.ERROR) as cnx:
-            ins = list(dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 1, bytearray(b"\xff\xab"), 0))
-        self.assertEqual(cnx.output, ["ERROR:androguard.dvm:Invalid instruction encountered! "
-                                      "Stop parsing bytecode at idx 0. Message: Unknown Instruction '0xabff'"])
-        self.assertEqual(len(ins), 0)  # No instruction should be parsed
+        """Test if unknown instructions raise an InvalidInstruction error"""
+        with self.assertRaises(dex.InvalidInstruction):
+            ins = list(
+                dex.LinearSweepAlgorithm.get_instructions(
+                    MockClassManager(), 1, bytearray(b"\xff\xab"), 0
+                )
+            )
 
-        with self.assertLogs(logger='androguard.dvm', level=logging.ERROR) as cnx:
-            ins = list(dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 2, bytearray(b"\x00\x00"
-                                                                                                  b"\xff\xab"), 0))
-        self.assertEqual(cnx.output, ["ERROR:androguard.dvm:Invalid instruction encountered! "
-                                      "Stop parsing bytecode at idx 2. Message: Unknown Instruction '0xabff'"])
-        self.assertEqual(len(ins), 1)  # One instruction should be parsed
+        with self.assertRaises(dex.InvalidInstruction):
+            ins = list(
+                dex.LinearSweepAlgorithm.get_instructions(
+                    MockClassManager(),
+                    2,
+                    bytearray(b"\x00\x00" b"\xff\xab"),
+                    0,
+                )
+            )
 
     def testIncompleteInstruction(self):
         """Test if incomplete bytecode log an error"""
         # Test if instruction can be parsed
-        self.assertIsInstance(dvm.Instruction51l(MockClassManager(),
-                                                 bytearray(b'\x18\x01\x23\x23\x00\xff\x99\x11\x22\x22')), dvm.Instruction51l)
+        self.assertIsInstance(
+            dex.Instruction51l(
+                MockClassManager(),
+                bytearray(b'\x18\x01\x23\x23\x00\xff\x99\x11\x22\x22'),
+            ),
+            dex.Instruction51l,
+        )
 
-        ins = list(dvm.LinearSweepAlgorithm.get_instructions(MockClassManager(), 5, bytearray(b"\x18\x01\xff\xff"), 0))
-        self.assertEqual(len(ins), 0)
+        with self.assertRaises(dex.InvalidInstruction):
+            ins = list(
+                dex.LinearSweepAlgorithm.get_instructions(
+                    MockClassManager(), 5, bytearray(b"\x18\x01\xff\xff"), 0
+                )
+            )
 
     def testInstruction21h(self):
         """Test function of Instruction 21h used for const{,-wide}/high16"""
-        ins = dvm.Instruction21h(MockClassManager(), bytearray([0x15, 0x00, 0x42, 0x11]))
+        ins = dex.Instruction21h(
+            MockClassManager(), bytearray([0x15, 0x00, 0x42, 0x11])
+        )
         self.assertEqual(ins.get_op_value(), 0x15)
         self.assertEqual(ins.get_literals(), [0x11420000])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, 0x11420000)])
+        self.assertEqual(
+            ins.get_operands(),
+            [(dex.Operand.REGISTER, 0x00), (dex.Operand.LITERAL, 0x11420000)],
+        )
         self.assertEqual(ins.get_name(), 'const/high16')
         self.assertEqual(ins.get_output(), 'v0, 289538048')
         self.assertEqual(ins.get_raw(), bytearray([0x15, 0x00, 0x42, 0x11]))
 
-        ins = dvm.Instruction21h(MockClassManager(), bytearray([0x19, 0x00, 0x42, 0x11]))
+        ins = dex.Instruction21h(
+            MockClassManager(), bytearray([0x19, 0x00, 0x42, 0x11])
+        )
         self.assertEqual(ins.get_op_value(), 0x19)
         self.assertEqual(ins.get_literals(), [0x1142000000000000])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, 0x1142000000000000)])
+        self.assertEqual(
+            ins.get_operands(),
+            [
+                (dex.Operand.REGISTER, 0x00),
+                (dex.Operand.LITERAL, 0x1142000000000000),
+            ],
+        )
         self.assertEqual(ins.get_name(), 'const-wide/high16')
         self.assertEqual(ins.get_output(), 'v0, 1243556447107678208')
         self.assertEqual(ins.get_raw(), bytearray([0x19, 0x00, 0x42, 0x11]))
 
-        ins = dvm.Instruction21h(MockClassManager(), bytearray([0x19, 0x00, 0xbe, 0xff]))
+        ins = dex.Instruction21h(
+            MockClassManager(), bytearray([0x19, 0x00, 0xBE, 0xFF])
+        )
         self.assertEqual(ins.get_op_value(), 0x19)
         self.assertEqual(ins.get_literals(), [-18577348462903296])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, -18577348462903296)])
+        self.assertEqual(
+            ins.get_operands(),
+            [
+                (dex.Operand.REGISTER, 0x00),
+                (dex.Operand.LITERAL, -18577348462903296),
+            ],
+        )
         self.assertEqual(ins.get_name(), 'const-wide/high16')
         self.assertEqual(ins.get_output(), 'v0, -18577348462903296')
-        self.assertEqual(ins.get_raw(), bytearray([0x19, 0x00, 0xbe, 0xff]))
+        self.assertEqual(ins.get_raw(), bytearray([0x19, 0x00, 0xBE, 0xFF]))
 
     def testInstruction51l(self):
         """test the functionality of const-wide"""
-        ins = dvm.Instruction51l(MockClassManager(), bytearray([0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        ins = dex.Instruction51l(
+            MockClassManager(),
+            bytearray(
+                [0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+            ),
+        )
         self.assertEqual(ins.get_op_value(), 0x18)
         self.assertEqual(ins.get_literals(), [0])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, 0)])
+        self.assertEqual(
+            ins.get_operands(),
+            [(dex.Operand.REGISTER, 0x00), (dex.Operand.LITERAL, 0)],
+        )
         self.assertEqual(ins.get_name(), 'const-wide')
         self.assertEqual(ins.get_output(), 'v0, 0')
-        self.assertEqual(ins.get_raw(), bytearray([0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]))
+        self.assertEqual(
+            ins.get_raw(),
+            bytearray(
+                [0x18, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+            ),
+        )
 
-        bytecode = bytearray([0x18, 0x00, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x70])
-        ins = dvm.Instruction51l(MockClassManager(), bytecode)
+        bytecode = bytearray(
+            [0x18, 0x00, 0x12, 0x34, 0x56, 0x78, 0x90, 0x12, 0x34, 0x70]
+        )
+        ins = dex.Instruction51l(MockClassManager(), bytecode)
         self.assertEqual(ins.get_op_value(), 0x18)
         self.assertEqual(ins.get_literals(), [0x7034129078563412])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, 0x7034129078563412)])
+        self.assertEqual(
+            ins.get_operands(),
+            [
+                (dex.Operand.REGISTER, 0x00),
+                (dex.Operand.LITERAL, 0x7034129078563412),
+            ],
+        )
         self.assertEqual(ins.get_name(), 'const-wide')
         self.assertEqual(ins.get_output(), 'v0, 8085107642740388882')
         self.assertEqual(ins.get_raw(), bytecode)
 
-        bytecode = bytearray([0x18, 0x00, 0xee, 0xcb, 0xa9, 0x87, 0x6f, 0xed, 0xcb, 0x8f])
-        ins = dvm.Instruction51l(MockClassManager(), bytecode)
+        bytecode = bytearray(
+            [0x18, 0x00, 0xEE, 0xCB, 0xA9, 0x87, 0x6F, 0xED, 0xCB, 0x8F]
+        )
+        ins = dex.Instruction51l(MockClassManager(), bytecode)
         self.assertEqual(ins.get_op_value(), 0x18)
         self.assertEqual(ins.get_literals(), [-8085107642740388882])
-        self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, 0x00), (dvm.Operand.LITERAL, -8085107642740388882)])
+        self.assertEqual(
+            ins.get_operands(),
+            [
+                (dex.Operand.REGISTER, 0x00),
+                (dex.Operand.LITERAL, -8085107642740388882),
+            ],
+        )
         self.assertEqual(ins.get_name(), 'const-wide')
         self.assertEqual(ins.get_output(), 'v0, -8085107642740388882')
         self.assertEqual(ins.get_raw(), bytecode)
@@ -466,11 +571,16 @@ class InstructionTest(unittest.TestCase):
             (0x86, 6, -8),
         ]
         for args, reg, lit in tests:
-            ins = dvm.Instruction11n(MockClassManager(), bytearray([0x12, args]))
+            ins = dex.Instruction11n(
+                MockClassManager(), bytearray([0x12, args])
+            )
             self.assertEqual(ins.get_name(), 'const/4')
             self.assertEqual(ins.get_literals(), [lit])
             self.assertEqual(ins.get_raw(), bytearray([0x12, args]))
-            self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, reg), (dvm.Operand.LITERAL, lit)])
+            self.assertEqual(
+                ins.get_operands(),
+                [(dex.Operand.REGISTER, reg), (dex.Operand.LITERAL, lit)],
+            )
             self.assertEqual(ins.get_output(), 'v{}, {}'.format(reg, lit))
 
     def testInstruction21s(self):
@@ -492,24 +602,30 @@ class InstructionTest(unittest.TestCase):
         for args, reg, lit in tests:
             # const/16
             bytecode = bytearray([0x13] + args)
-            ins = dvm.Instruction21s(MockClassManager(), bytecode)
+            ins = dex.Instruction21s(MockClassManager(), bytecode)
             self.assertEqual(ins.get_name(), 'const/16')
             self.assertEqual(ins.get_literals(), [lit])
             self.assertEqual(ins.get_raw(), bytecode)
-            self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, reg), (dvm.Operand.LITERAL, lit)])
+            self.assertEqual(
+                ins.get_operands(),
+                [(dex.Operand.REGISTER, reg), (dex.Operand.LITERAL, lit)],
+            )
             self.assertEqual(ins.get_output(), 'v{}, {}'.format(reg, lit))
 
             # const-wide/16
             bytecode = bytearray([0x16] + args)
-            ins = dvm.Instruction21s(MockClassManager(), bytecode)
+            ins = dex.Instruction21s(MockClassManager(), bytecode)
             self.assertEqual(ins.get_name(), 'const-wide/16')
             self.assertEqual(ins.get_literals(), [lit])
             self.assertEqual(ins.get_raw(), bytecode)
-            self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, reg), (dvm.Operand.LITERAL, lit)])
+            self.assertEqual(
+                ins.get_operands(),
+                [(dex.Operand.REGISTER, reg), (dex.Operand.LITERAL, lit)],
+            )
             self.assertEqual(ins.get_output(), 'v{}, {}'.format(reg, lit))
 
     def testInstruction31i(self):
-        """Test functionaltiy of Instruction31i (const, const-wide/32)"""
+        """Test functionality of Instruction31i (const, const-wide/32)"""
 
         # const is often used to load resources...
         tests = [
@@ -521,21 +637,98 @@ class InstructionTest(unittest.TestCase):
         for args, reg, lit in tests:
             # const
             bytecode = bytearray([0x14] + args)
-            ins = dvm.Instruction31i(MockClassManager(), bytecode)
+            ins = dex.Instruction31i(MockClassManager(), bytecode)
             self.assertEqual(ins.get_name(), 'const')
             self.assertEqual(ins.get_literals(), [lit])
             self.assertEqual(ins.get_raw(), bytecode)
-            self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, reg), (dvm.Operand.LITERAL, lit)])
+            self.assertEqual(
+                ins.get_operands(),
+                [(dex.Operand.REGISTER, reg), (dex.Operand.LITERAL, lit)],
+            )
             self.assertEqual(ins.get_output(), 'v{}, {}'.format(reg, lit))
 
             # const-wide/32
             bytecode = bytearray([0x17] + args)
-            ins = dvm.Instruction31i(MockClassManager(), bytecode)
+            ins = dex.Instruction31i(MockClassManager(), bytecode)
             self.assertEqual(ins.get_name(), 'const-wide/32')
             self.assertEqual(ins.get_literals(), [lit])
             self.assertEqual(ins.get_raw(), bytecode)
-            self.assertEqual(ins.get_operands(), [(dvm.Operand.REGISTER, reg), (dvm.Operand.LITERAL, lit)])
+            self.assertEqual(
+                ins.get_operands(),
+                [(dex.Operand.REGISTER, reg), (dex.Operand.LITERAL, lit)],
+            )
             self.assertEqual(ins.get_output(), 'v{}, {}'.format(reg, lit))
+
+    def testBrokenDex(self):
+        """Test various broken DEX headers"""
+        # really not a dex file
+        with self.assertRaises(ValueError) as cnx:
+            dex.DEX(b'\x00\x00\x00\x00\x00\x00\x00\x00')
+        self.assertIn('Header too small', str(cnx.exception))
+
+        # Adler32 will not match, zeroed out file
+        data_dex = binascii.unhexlify(
+            '6465780A303335001F6C4D5A6ACF889AF588F3237FC9F20B41F56A2408749D1B'
+            'C81E000070000000785634120000000000000000341E00009400000070000000'
+            '2E000000C0020000310000007803000011000000C4050000590000004C060000'
+            '090000001409000094140000340A0000' + ('00' * (7880 - 0x70))
+        )
+
+        with self.assertRaises(ValueError) as cnx:
+            dex.DEX(data_dex)
+        self.assertIn("Adler32", str(cnx.exception))
+
+        # A very very basic dex file (without a map)
+        # But should parse...
+        data_dex = binascii.unhexlify(
+            '6465780A30333500460A4882696E76616C6964696E76616C6964696E76616C69'
+            '7000000070000000785634120000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000000'
+            '00000000000000000000000000000000'
+        )
+        self.assertIsNotNone(dex.DEX(data_dex))
+
+        # Wrong header size
+        data_dex = binascii.unhexlify(
+            '6465780A30333500480A2C8D696E76616C6964696E76616C6964696E76616C69'
+            '7100000071000000785634120000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000'
+        )
+        with self.assertRaises(ValueError) as cnx:
+            dex.DEX(data_dex)
+        self.assertIn("Wrong header size", str(cnx.exception))
+
+        # Non integer version, but parse it
+        data_dex = binascii.unhexlify(
+            '6465780AFF00AB00460A4882696E76616C6964696E76616C6964696E76616C69'
+            '7000000070000000785634120000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000000'
+            '00000000000000000000000000000000'
+        )
+        self.assertIsNotNone(dex.DEX(data_dex))
+
+        # Big Endian file
+        data_dex = binascii.unhexlify(
+            '6465780A30333500460AF480696E76616C6964696E76616C6964696E76616C69'
+            '7000000070000000123456780000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000000'
+            '00000000000000000000000000000000'
+        )
+        with self.assertRaises(NotImplementedError) as cnx:
+            dex.DEX(data_dex)
+        self.assertIn("swapped endian tag", str(cnx.exception))
+
+        # Weird endian file
+        data_dex = binascii.unhexlify(
+            '6465780A30333500AB0BC3E4696E76616C6964696E76616C6964696E76616C69'
+            '7000000070000000ABCDEF120000000000000000000000000000000000000000'
+            '0000000000000000000000000000000000000000000000000000000000000000'
+            '00000000000000000000000000000000'
+        )
+        with self.assertRaises(ValueError) as cnx:
+            dex.DEX(data_dex)
+        self.assertIn("Wrong endian tag", str(cnx.exception))
 
 
 if __name__ == '__main__':

@@ -1,11 +1,14 @@
+import io
+import os
 import unittest
-
-import sys
 from xml.dom import minidom
-from lxml import etree
 
-from androguard.core.bytecodes import axml
-from androguard.core import bytecode
+from androguard.core import axml
+from androguard.core.apk import APK
+from androguard.util import set_log
+
+test_dir = os.path.dirname(os.path.abspath(__file__))
+
 
 def is_valid_manifest(tree):
     # We can not really check much more...
@@ -14,7 +17,8 @@ def is_valid_manifest(tree):
         return True
     return False
 
-# text_compare and xml_compare are modified from 
+
+# text_compare and xml_compare are modified from
 # https://bitbucket.org/ianb/formencode/src/tip/formencode/doctest_xml_compare.py
 def text_compare(t1, t2):
     if not t1 and not t2:
@@ -22,6 +26,7 @@ def text_compare(t1, t2):
     if t1 == '*' or t2 == '*':
         return True
     return (t1 or '').strip() == (t2 or '').strip()
+
 
 def xml_compare(x1, x2, reporter=None):
     """
@@ -39,18 +44,23 @@ def xml_compare(x1, x2, reporter=None):
             pass
         elif x2.attrib.get(name) != value:
             if reporter:
-                reporter('Attributes do not match: %s=%r, %s=%r'
-                         % (name, value, name, x2.attrib.get(name)))
+                reporter(
+                    'Attributes do not match: %s=%r, %s=%r'
+                    % (name, value, name, x2.attrib.get(name))
+                )
             return False
     for name in x2.attrib.keys():
         if name not in x1.attrib:
-            if x2.tag == "application" and name == "{http://schemas.android.com/apk/res/android}debuggable":
+            if (
+                x2.tag == "application"
+                and name
+                == "{http://schemas.android.com/apk/res/android}debuggable"
+            ):
                 # Debug attribute might be added by aapt
                 pass
             else:
                 if reporter:
-                    reporter('x2 has an attribute x1 is missing: %s'
-                             % name)
+                    reporter('x2 has an attribute x1 is missing: %s' % name)
                 return False
     if not text_compare(x1.text, x2.text):
         if reporter:
@@ -64,16 +74,16 @@ def xml_compare(x1, x2, reporter=None):
     cl2 = x2.getchildren()
     if len(cl1) != len(cl2):
         if reporter:
-            reporter('children length differs, %i != %i'
-                     % (len(cl1), len(cl2)))
+            reporter(
+                'children length differs, %i != %i' % (len(cl1), len(cl2))
+            )
         return False
     i = 0
     for c1, c2 in zip(cl1, cl2):
         i += 1
         if not xml_compare(c1, c2, reporter=reporter):
             if reporter:
-                reporter('children %i do not match: %s'
-                         % (i, c1.tag))
+                reporter('children %i do not match: %s' % (i, c1.tag))
             return False
     return True
 
@@ -85,57 +95,170 @@ class AXMLTest(unittest.TestCase):
         :return:
         """
         # Fake, Empty AXML file
-        a = axml.AXMLPrinter(b"\x03\x00\x08\x00\x24\x00\x00\x00"
-                             b"\x01\x00\x1c\x00\x1c\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        a = axml.AXMLPrinter(
+            b"\x03\x00\x08\x00\x24\x00\x00\x00"
+            b"\x01\x00\x1c\x00\x1c\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        )
 
         self.assertIsNotNone(a)
 
         self.assertEqual(a._fix_value("hello world"), "hello world")
-        self.assertEqual(a._fix_value("Foobar \u000a\u000d\u0b12"), "Foobar \u000a\u000d\u0b12")
+        self.assertEqual(
+            a._fix_value("Foobar \u000a\u000d\u0b12"),
+            "Foobar \u000a\u000d\u0b12",
+        )
         self.assertEqual(a._fix_value("hello \U00011234"), "hello \U00011234")
         self.assertEqual(a._fix_value("\uFFFF"), "_")
         self.assertEqual(a._fix_value("hello\x00world"), "hello")
 
         self.assertEqual(a._fix_name('', 'foobar'), ('', 'foobar'))
         self.assertEqual(a._fix_name('', '5foobar'), ('', '_5foobar'))
-        self.assertEqual(a._fix_name('', 'android:foobar'), ('', 'android_foobar'))
-        self.assertEqual(a._fix_name('', 'androiddd:foobar'), ('', 'androiddd_foobar'))
+        self.assertEqual(
+            a._fix_name('', 'android:foobar'), ('', 'android_foobar')
+        )
+        self.assertEqual(
+            a._fix_name('', 'androiddd:foobar'), ('', 'androiddd_foobar')
+        )
         self.assertEqual(a._fix_name('', 'sdf:foobar'), ('', 'sdf_foobar'))
-        self.assertEqual(a._fix_name('', 'android:sdf:foobar'), ('', 'android_sdf_foobar'))
+        self.assertEqual(
+            a._fix_name('', 'android:sdf:foobar'), ('', 'android_sdf_foobar')
+        )
         self.assertEqual(a._fix_name('', '5:foobar'), ('', '_5_foobar'))
 
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'foobar'), ('{http://schemas.android.com/apk/res/android}', 'foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', '5foobar'), ('{http://schemas.android.com/apk/res/android}', '_5foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'android:foobar'), ('{http://schemas.android.com/apk/res/android}', 'android_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'androiddd:foobar'), ('{http://schemas.android.com/apk/res/android}', 'androiddd_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'sdf:foobar'), ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'android:sdf:foobar'), ('{http://schemas.android.com/apk/res/android}', 'android_sdf_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', '5:foobar'), ('{http://schemas.android.com/apk/res/android}', '_5_foobar'))
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', 'foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', '5foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', '_5foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'android:foobar',
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'android_foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'androiddd:foobar',
+            ),
+            (
+                '{http://schemas.android.com/apk/res/android}',
+                'androiddd_foobar',
+            ),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', 'sdf:foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'android:sdf:foobar',
+            ),
+            (
+                '{http://schemas.android.com/apk/res/android}',
+                'android_sdf_foobar',
+            ),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', '5:foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', '_5_foobar'),
+        )
 
         # Add a namespace mapping and try again
         def new_nsmap(self):
-            return {"android": "http://schemas.android.com/apk/res/android",
-                    "something": "http://example/url"}
+            return {
+                "android": "http://schemas.android.com/apk/res/android",
+                "something": "http://example/url",
+            }
+
         setattr(axml.AXMLParser, 'nsmap', property(new_nsmap))
 
         self.assertEqual(a._fix_name('', 'foobar'), ('', 'foobar'))
         self.assertEqual(a._fix_name('', '5foobar'), ('', '_5foobar'))
-        self.assertEqual(a._fix_name('', 'android:foobar'), ('{http://schemas.android.com/apk/res/android}', 'foobar'))
-        self.assertEqual(a._fix_name('', 'something:foobar'), ('{http://example/url}', 'foobar'))
-        self.assertEqual(a._fix_name('', 'androiddd:foobar'), ('', 'androiddd_foobar'))
+        self.assertEqual(
+            a._fix_name('', 'android:foobar'),
+            ('{http://schemas.android.com/apk/res/android}', 'foobar'),
+        )
+        self.assertEqual(
+            a._fix_name('', 'something:foobar'),
+            ('{http://example/url}', 'foobar'),
+        )
+        self.assertEqual(
+            a._fix_name('', 'androiddd:foobar'), ('', 'androiddd_foobar')
+        )
         self.assertEqual(a._fix_name('', 'sdf:foobar'), ('', 'sdf_foobar'))
-        self.assertEqual(a._fix_name('', 'android:sdf:foobar'), ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'))
+        self.assertEqual(
+            a._fix_name('', 'android:sdf:foobar'),
+            ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'),
+        )
         self.assertEqual(a._fix_name('', '5:foobar'), ('', '_5_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'foobar'), ('{http://schemas.android.com/apk/res/android}', 'foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', '5foobar'), ('{http://schemas.android.com/apk/res/android}', '_5foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'android:foobar'), ('{http://schemas.android.com/apk/res/android}', 'android_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'androiddd:foobar'), ('{http://schemas.android.com/apk/res/android}', 'androiddd_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'sdf:foobar'), ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', 'android:sdf:foobar'), ('{http://schemas.android.com/apk/res/android}', 'android_sdf_foobar'))
-        self.assertEqual(a._fix_name('{http://schemas.android.com/apk/res/android}', '5:foobar'), ('{http://schemas.android.com/apk/res/android}', '_5_foobar'))
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', 'foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', '5foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', '_5foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'android:foobar',
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'android_foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'androiddd:foobar',
+            ),
+            (
+                '{http://schemas.android.com/apk/res/android}',
+                'androiddd_foobar',
+            ),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', 'sdf:foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', 'sdf_foobar'),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}',
+                'android:sdf:foobar',
+            ),
+            (
+                '{http://schemas.android.com/apk/res/android}',
+                'android_sdf_foobar',
+            ),
+        )
+        self.assertEqual(
+            a._fix_name(
+                '{http://schemas.android.com/apk/res/android}', '5:foobar'
+            ),
+            ('{http://schemas.android.com/apk/res/android}', '_5_foobar'),
+        )
 
     def testNoStringPool(self):
         """Test if a single header without string pool is rejected"""
@@ -151,82 +274,116 @@ class AXMLTest(unittest.TestCase):
 
     def testWrongHeaderSize(self):
         """Test if a wrong header size is rejected"""
-        a = axml.AXMLPrinter(b"\x03\x00\x10\x00\x2c\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x01\x00\x1c\x00\x1c\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        a = axml.AXMLPrinter(
+            b"\x03\x00\x10\x00\x2c\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x01\x00\x1c\x00\x1c\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        )
         self.assertFalse(a.is_valid())
 
     def testWrongStringPoolHeader(self):
         """Test if a wrong header type is rejected"""
-        a = axml.AXMLPrinter(b"\x03\x00\x08\x00\x24\x00\x00\x00" b"\xDE\xAD\x1c\x00\x1c\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        a = axml.AXMLPrinter(
+            b"\x03\x00\x08\x00\x24\x00\x00\x00"
+            b"\xDE\xAD\x1c\x00\x1c\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        )
         self.assertFalse(a.is_valid())
 
     def testWrongStringPoolSize(self):
         """Test if a wrong string pool header size is rejected"""
-        a = axml.AXMLPrinter(b"\x03\x00\x08\x00\x2c\x00\x00\x00"
-                             b"\x01\x00\x24\x00\x24\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00"
-                             b"\x00\x00\x00\x00\x00\x00\x00\x00")
+        a = axml.AXMLPrinter(
+            b"\x03\x00\x08\x00\x2c\x00\x00\x00"
+            b"\x01\x00\x24\x00\x24\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00"
+            b"\x00\x00\x00\x00\x00\x00\x00\x00"
+        )
         self.assertFalse(a.is_valid())
 
     def testArscHeader(self):
         """Test if wrong arsc headers are rejected"""
         with self.assertRaises(axml.ResParserError) as cnx:
-            axml.ARSCHeader(bytecode.BuffHandle(b"\x02\x01"))
+            axml.ARSCHeader(io.BufferedReader(io.BytesIO(b"\x02\x01")))
         self.assertIn("Can not read over the buffer size", str(cnx.exception))
 
         with self.assertRaises(axml.ResParserError) as cnx:
-            axml.ARSCHeader(bytecode.BuffHandle(b"\x02\x01\xFF\xFF\x08\x00\x00\x00"))
+            axml.ARSCHeader(
+                io.BufferedReader(
+                    io.BytesIO(b"\x02\x01\xFF\xFF\x08\x00\x00\x00")
+                )
+            )
         self.assertIn("smaller than header size", str(cnx.exception))
 
         with self.assertRaises(axml.ResParserError) as cnx:
-            axml.ARSCHeader(bytecode.BuffHandle(b"\x02\x01\x01\x00\x08\x00\x00\x00"))
-        self.assertIn("declared header size is smaller than required size", str(cnx.exception))
+            axml.ARSCHeader(
+                io.BufferedReader(
+                    io.BytesIO(b"\x02\x01\x01\x00\x08\x00\x00\x00")
+                )
+            )
+        self.assertIn(
+            "declared header size is smaller than required size",
+            str(cnx.exception),
+        )
 
         with self.assertRaises(axml.ResParserError) as cnx:
-            axml.ARSCHeader(bytecode.BuffHandle(b"\x02\x01\x08\x00\x04\x00\x00\x00"))
-        self.assertIn("declared chunk size is smaller than required size", str(cnx.exception))
+            axml.ARSCHeader(
+                io.BufferedReader(
+                    io.BytesIO(b"\x02\x01\x08\x00\x04\x00\x00\x00")
+                )
+            )
+        self.assertIn(
+            "declared chunk size is smaller than required size",
+            str(cnx.exception),
+        )
 
-        a = axml.ARSCHeader(bytecode.BuffHandle(b"\xCA\xFE\x08\x00\x10\x00\x00\x00"
-                                                b"\xDE\xEA\xBE\xEF\x42\x42\x42\x42"))
+        a = axml.ARSCHeader(
+            io.BufferedReader(
+                io.BytesIO(
+                    b"\xCA\xFE\x08\x00\x10\x00\x00\x00"
+                    b"\xDE\xEA\xBE\xEF\x42\x42\x42\x42"
+                )
+            )
+        )
 
         self.assertEqual(a.type, 0xFECA)
         self.assertEqual(a.header_size, 8)
         self.assertEqual(a.size, 16)
         self.assertEqual(a.start, 0)
         self.assertEqual(a.end, 16)
-        self.assertEqual(repr(a), "<ARSCHeader idx='0x00000000' type='65226' header_size='8' size='16'>")
+        self.assertEqual(
+            repr(a),
+            "<ARSCHeader idx='0x00000000' type='65226' header_size='8' size='16'>",
+        )
 
     def testAndroidManifest(self):
         filenames = [
-            "examples/axml/AndroidManifest.xml",
-            "examples/axml/AndroidManifest-Chinese.xml",
-            "examples/axml/AndroidManifestDoubleNamespace.xml",
-            "examples/axml/AndroidManifestExtraNamespace.xml",
-            "examples/axml/AndroidManifest_InvalidCharsInAttribute.xml",
-            "examples/axml/AndroidManifestLiapp.xml",
-            "examples/axml/AndroidManifestMaskingNamespace.xml",
-            "examples/axml/AndroidManifest_NamespaceInAttributeName.xml",
-            "examples/axml/AndroidManifest_NamespaceInAttributeName2.xml",
-            "examples/axml/AndroidManifestNonZeroStyle.xml",
-            "examples/axml/AndroidManifestNullbytes.xml",
-            "examples/axml/AndroidManifestTextChunksXML.xml",
-            "examples/axml/AndroidManifestUTF8Strings.xml",
-            "examples/axml/AndroidManifestWithComment.xml",
-            "examples/axml/AndroidManifest_WrongChunkStart.xml",
-            "examples/axml/AndroidManifest-xmlns.xml",
+            "data/AXML/AndroidManifest.xml",
+            "data/AXML/AndroidManifest-Chinese.xml",
+            "data/AXML/AndroidManifestDoubleNamespace.xml",
+            "data/AXML/AndroidManifestExtraNamespace.xml",
+            "data/AXML/AndroidManifest_InvalidCharsInAttribute.xml",
+            "data/AXML/AndroidManifestLiapp.xml",
+            "data/AXML/AndroidManifestMaskingNamespace.xml",
+            "data/AXML/AndroidManifest_NamespaceInAttributeName.xml",
+            "data/AXML/AndroidManifest_NamespaceInAttributeName2.xml",
+            "data/AXML/AndroidManifestNonZeroStyle.xml",
+            "data/AXML/AndroidManifestNullbytes.xml",
+            "data/AXML/AndroidManifestTextChunksXML.xml",
+            "data/AXML/AndroidManifestUTF8Strings.xml",
+            "data/AXML/AndroidManifestWithComment.xml",
+            "data/AXML/AndroidManifest_WrongChunkStart.xml",
+            "data/AXML/AndroidManifest-xmlns.xml",
         ]
 
         for filename in filenames:
-            with open(filename, "rb") as fd:
+            with open(os.path.join(test_dir, filename), "rb") as fd:
                 ap = axml.AXMLPrinter(fd.read())
             self.assertIsNotNone(ap)
             self.assertTrue(ap.is_valid())
@@ -236,30 +393,16 @@ class AXMLTest(unittest.TestCase):
             e = minidom.parseString(ap.get_buff())
             self.assertIsNotNone(e)
 
-    def testFileCompare(self):
-        """
-        Compare the binary version of a file with the plain text
-        """
-        binary = "examples/axml/AndroidManifest.xml"
-        plain = "examples/android/TC/AndroidManifest.xml"
-
-        with open(plain, "rb") as fp:
-            x1 = etree.fromstring(fp.read())
-        with open(binary, "rb") as fp:
-            x2 = axml.AXMLPrinter(fp.read()).get_xml_obj()
-
-        self.assertTrue(xml_compare(x1, x2, reporter=print))
-
     def testNonManifest(self):
         filenames = [
-            "examples/axml/test.xml",
-            "examples/axml/test1.xml",
-            "examples/axml/test2.xml",
-            "examples/axml/test3.xml",
+            "data/AXML/test.xml",
+            "data/AXML/test1.xml",
+            "data/AXML/test2.xml",
+            "data/AXML/test3.xml",
         ]
 
         for filename in filenames:
-            with open(filename, "rb") as fp:
+            with open(os.path.join(test_dir, filename), "rb") as fp:
                 ap = axml.AXMLPrinter(fp.read())
 
             self.assertTrue(ap.is_valid())
@@ -273,9 +416,9 @@ class AXMLTest(unittest.TestCase):
         Test if a nonzero style offset in the string section causes problems
         if the counter is 0
         """
-        filename = "examples/axml/AndroidManifestNonZeroStyle.xml"
+        filename = "data/AXML/AndroidManifestNonZeroStyle.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -288,10 +431,10 @@ class AXMLTest(unittest.TestCase):
         Test if non-null terminated strings are detected.
         This sample even segfaults aapt...
         """
-        filename = "examples/axml/AndroidManifest_StringNotTerminated.xml"
+        filename = "data/AXML/AndroidManifest_StringNotTerminated.xml"
 
         with self.assertRaises(axml.ResParserError) as cnx:
-            with open(filename, "rb") as f:
+            with open(os.path.join(test_dir, filename), "rb") as f:
                 ap = axml.AXMLPrinter(f.read())
         self.assertIn("not null terminated", str(cnx.exception))
 
@@ -299,9 +442,9 @@ class AXMLTest(unittest.TestCase):
         """
         Test if extra namespaces cause problems
         """
-        filename = "examples/axml/AndroidManifestExtraNamespace.xml"
+        filename = "data/AXML/AndroidManifestExtraNamespace.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -313,9 +456,9 @@ class AXMLTest(unittest.TestCase):
         """
         Test for Text chunks containing XML
         """
-        filename = "examples/axml/AndroidManifestTextChunksXML.xml"
+        filename = "data/AXML/AndroidManifestTextChunksXML.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -327,9 +470,9 @@ class AXMLTest(unittest.TestCase):
         """
         Assert that files with a broken filesize are not parsed
         """
-        filename = "examples/axml/AndroidManifestWrongFilesize.xml"
+        filename = "data/AXML/AndroidManifestWrongFilesize.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             a = axml.AXMLPrinter(f.read())
         self.assertFalse(a.is_valid())
 
@@ -337,9 +480,9 @@ class AXMLTest(unittest.TestCase):
         """
         Assert that Strings with nullbytes are handled correctly
         """
-        filename = "examples/axml/AndroidManifestNullbytes.xml"
+        filename = "data/AXML/AndroidManifestNullbytes.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -352,9 +495,9 @@ class AXMLTest(unittest.TestCase):
         Assert that Namespaces which are used in a tag and the tag is closed
         are actually correctly parsed.
         """
-        filename = "examples/axml/AndroidManifestMaskingNamespace.xml"
+        filename = "data/AXML/AndroidManifestMaskingNamespace.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -366,9 +509,9 @@ class AXMLTest(unittest.TestCase):
         """
         Test if weird namespace constelations cause problems
         """
-        filename = "examples/axml/AndroidManifestDoubleNamespace.xml"
+        filename = "data/AXML/AndroidManifestDoubleNamespace.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
@@ -380,14 +523,21 @@ class AXMLTest(unittest.TestCase):
         """
         Assert that Packed files are read
         """
-        filename = "examples/axml/AndroidManifestLiapp.xml"
+        filename = "data/AXML/AndroidManifestLiapp.xml"
 
-        with open(filename, "rb") as f:
+        with open(os.path.join(test_dir, filename), "rb") as f:
             ap = axml.AXMLPrinter(f.read())
         self.assertIsInstance(ap, axml.AXMLPrinter)
         self.assertTrue(ap.is_valid())
 
         self.assertTrue(ap.is_packed())
+
+    def testCompactResource(self):
+        """
+        Assert that app name from compact resource is read correctly
+        """
+        a = APK(os.path.join(test_dir, "data/AXML/compact-entry.apk"))
+        self.assertEqual(a.get_app_name(), "erev0s.com-CompactEntry")
 
 
 if __name__ == '__main__':
